@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Space Drop Math — Gamified (bugfix + faster)</title>
+<style>
+  :root{
+    --bg1:#031026; --bg2:#04182a; --accent:#7be57b; --text:#e6f6ff;
+    --good:#4CAF50; --bad:#FF5252; --muted:#9fb7d0;
+  }
+  html,body{height:100%;margin:0;background:linear-gradient(180deg,var(--bg1),var(--bg2));font-family:Inter, system-ui, Arial;color:var(--text)}
+  .wrap{max-width:980px;margin:18px auto;padding:14px}
+  .top{display:flex;flex-direction:column;align-items:center;gap:8px;margin-bottom:12px}
+  .ship-wrap{width:220px;height:130px;display:flex;align-items:center;justify-content:center;position:relative}
+  .ship-svg{width:220px;height:120px;filter:drop-shadow(0 8px 20px rgba(0,0,0,0.6))}
+  .pilot-name{position:absolute;left:12px;top:10px;font-size:12px;color:#bfe9ff;opacity:0.95;font-weight:700}
+  .problem-card{
+    width:360px;background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+    border-radius:12px;padding:14px;border:2px solid rgba(255,255,255,0.04);box-shadow:0 8px 24px rgba(0,0,0,0.5);
+    display:flex;flex-direction:column;align-items:center;gap:8px;
+  }
+  .problem{font-weight:900;font-size:36px;letter-spacing:0.6px}
+  .answer-slot{
+    width:100%;height:56px;border-radius:8px;background:linear-gradient(180deg,#021b28,#041226);
+    display:flex;align-items:center;justify-content:center;font-weight:900;font-size:28px;border:3px solid rgba(255,255,255,0.04);
+    transition: all 180ms;
+  }
+  .answer-slot.ok{ border-color:var(--good); box-shadow:0 8px 20px rgba(76,175,80,0.16); background:linear-gradient(180deg,#143e26,#0f2b1a); color:#eaffea;}
+  .answer-slot.bad{ border-color:var(--bad); box-shadow:0 8px 20px rgba(255,82,82,0.12); background:linear-gradient(180deg,#3b1016,#2a0b10); color:#ffdede;}
+  .playfield{margin-top:12px;height:520px;border-radius:12px;border:6px solid rgba(255,255,255,0.03);
+    background: radial-gradient(ellipse at 50% 20%, rgba(18,51,75,0.9) 0%, rgba(4,8,14,0.9) 50%, #000 100%);
+    box-shadow:0 10px 40px rgba(0,0,0,0.6); position:relative; overflow:hidden;
+  }
+  .star{position:absolute;width:3px;height:3px;border-radius:50%;background:linear-gradient(#fff,#bfe9ff);box-shadow:0 0 6px rgba(255,255,255,0.6)}
+  .planet{position:absolute;border-radius:50%;box-shadow:inset -8px -6px 18px rgba(255,255,255,0.03);}
+  .drop{
+    position:absolute;display:flex;align-items:center;justify-content:center;border-radius:50%;
+    min-width:64px;height:64px;padding:8px;font-weight:900;font-size:20px;color:#f8fbff;background:linear-gradient(180deg,#18313b,#0b1b24);
+    border:3px solid rgba(255,255,255,0.06); cursor:pointer; box-shadow:0 10px 22px rgba(0,0,0,0.6);
+    user-select:none; transform:translateY(-10px);
+    will-change: transform;
+  }
+  .drop:hover{ transform:translateY(-14px) scale(1.03) }
+  .drop.wrong{ border-color:var(--bad); background:linear-gradient(180deg,#4b1b1b,#2f0f11) }
+  .drop.correct{ border-color:var(--good); background:linear-gradient(180deg,#1e4b2b,#12361f) }
+
+  .hud{display:flex;justify-content:space-between;margin-top:10px;color:var(--muted);font-size:14px;align-items:center;gap:12px}
+  .left-hud{display:flex;gap:12px;align-items:center}
+  .stat{padding:6px 10px;border-radius:8px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.03);font-weight:800}
+  .stat .label{display:block;font-size:11px;color:var(--muted)}
+  .stat .val{font-size:16px;margin-top:2px}
+  .btn{background:transparent;border:2px solid rgba(255,255,255,0.04);padding:8px 12px;border-radius:8px;color:#98d7ff;cursor:pointer;font-weight:700}
+  .btn.pause{background:rgba(255,255,255,0.02);border-color:rgba(255,255,255,0.06)}
+  .level-wrap{width:220px;padding:6px 8px;border-radius:10px;background:linear-gradient(180deg,#021b28,#031423);border:1px solid rgba(255,255,255,0.03)}
+  .level-row{display:flex;align-items:center;gap:8px}
+  .level-bar{height:12px;background:rgba(255,255,255,0.04);border-radius:8px;overflow:hidden;flex:1}
+  .level-fill{height:100%;width:0%;background:linear-gradient(90deg,#ffd56b,#ff8a5b);transition:width 420ms}
+  .combo-bubble{padding:6px 8px;border-radius:8px;background:rgba(255,255,255,0.02);font-weight:800}
+  .score-pop{position:absolute;pointer-events:none;font-weight:900;font-size:18px;opacity:0;transform:translateY(0);transition:transform 700ms ease, opacity 700ms ease}
+  .confetti-canvas{position:absolute;inset:0;pointer-events:none;z-index:40}
+  @media (max-width:720px){ .problem-card{width:92%} .playfield{height:420px} .drop{min-width:56px;height:56px;font-size:18px} .level-wrap{width:160px} }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div class="ship-wrap" aria-hidden="true">
+        <div class="pilot-name">Pilot: Zuzu 👽</div>
+        <svg class="ship-svg" viewBox="0 0 320 160" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Cartoon spaceship with alien">
+          <g>
+            <ellipse cx="160" cy="110" rx="120" ry="22" fill="rgba(0,0,0,0.25)"/>
+            <path d="M40 94c20-42 70-74 120-74s100 32 120 74H40z" fill="#223a4b"/>
+            <path d="M62 92c17-32 52-56 98-56s81 24 98 56H62z" fill="#2c4f63"/>
+            <ellipse cx="160" cy="64" rx="54" ry="28" fill="#dff6ff22"/>
+            <ellipse cx="160" cy="62" rx="46" ry="24" fill="#9fd7ff33" stroke="#bfe9ff26" stroke-width="1"/>
+            <circle cx="158" cy="62" r="14" fill="#95ffb9"/>
+            <ellipse cx="151" cy="60" rx="2.6" ry="3.2" fill="#063"/>
+            <ellipse cx="165" cy="60" rx="2.6" ry="3.2" fill="#063"/>
+            <path d="M152 68c2 2 6 2 8 0" stroke="#063" stroke-width="1.6" stroke-linecap="round" />
+          </g>
+        </svg>
+      </div>
+
+      <div class="problem-card" aria-live="polite">
+        <div class="problem" id="problemText">6 + 2</div>
+        <div class="answer-slot" id="answerSlot">...</div>
+      </div>
+    </div>
+
+    <div class="playfield" id="playfield" aria-label="Playfield with falling numbers">
+      <canvas class="confetti-canvas" id="confettiCanvas"></canvas>
+    </div>
+
+    <div class="hud">
+      <div class="left-hud">
+        <div class="stat"><span class="label">Score</span><span class="val" id="scoreVal">0</span></div>
+        <div class="stat"><span class="label">Coins</span><span class="val" id="coinsVal">0</span></div>
+        <div class="stat"><span class="label">Best</span><span class="val" id="bestVal">0</span></div>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:12px">
+        <div class="level-wrap">
+          <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:6px">
+            <div id="levelLabel">Level 1</div><div id="ptsToNext">100</div>
+          </div>
+          <div class="level-row">
+            <div class="level-bar"><div class="level-fill" id="levelFill"></div></div>
+            <div class="combo-bubble" id="comboLabel">×1</div>
+          </div>
+        </div>
+
+        <div class="counters" style="display:flex;gap:10px;align-items:center">
+          <div class="stat" style="min-width:120px"><span class="label">Correct / Incorrect</span><span class="val" id="corrInc">0 / 0</span></div>
+          <div>
+            <button class="btn" id="newBtn">New</button>
+            <button class="btn" id="clearBtn">Clear</button>
+            <button class="btn pause" id="pauseBtn">Pause</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+/* Fixes:
+ - After correct click now generates a NEW problem (bugfix).
+ - Drops fall faster (shorter durations) and spawn more frequently.
+ - Rest of gamified features preserved.
+*/
+
+const playfield = document.getElementById('playfield');
+const problemText = document.getElementById('problemText');
+const answerSlot = document.getElementById('answerSlot');
+const newBtn = document.getElementById('newBtn');
+const clearBtn = document.getElementById('clearBtn');
+const pauseBtn = document.getElementById('pauseBtn');
+
+const scoreVal = document.getElementById('scoreVal');
+const coinsVal = document.getElementById('coinsVal');
+const bestVal = document.getElementById('bestVal');
+const corrInc = document.getElementById('corrInc');
+const levelLabel = document.getElementById('levelLabel');
+const ptsToNext = document.getElementById('ptsToNext');
+const levelFill = document.getElementById('levelFill');
+const comboLabel = document.getElementById('comboLabel');
+
+const confettiCanvas = document.getElementById('confettiCanvas');
+let confettiCtx, DPR;
+function setupConfettiCanvas(){
+  DPR = window.devicePixelRatio || 1;
+  confettiCanvas.width = confettiCanvas.clientWidth * DPR;
+  confettiCanvas.height = confettiCanvas.clientHeight * DPR;
+  confettiCtx = confettiCanvas.getContext('2d');
+  confettiCtx.scale(DPR, DPR);
+}
+setupConfettiCanvas();
+
+/* audio helpers */
+let audioCtx = null;
+function getAudioCtx(){ if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); return audioCtx; }
+function playDing(){ const ctx = getAudioCtx(), now = ctx.currentTime; const o = ctx.createOscillator(), g = ctx.createGain(); o.type='sine'; o.frequency.setValueAtTime(880, now); g.gain.setValueAtTime(0.0001, now); g.gain.exponentialRampToValueAtTime(0.28, now+0.01); g.gain.exponentialRampToValueAtTime(0.0001, now+0.28); o.connect(g); g.connect(ctx.destination); o.start(now); o.stop(now+0.45); }
+function playBuzz(){ const ctx = getAudioCtx(), now = ctx.currentTime; const o = ctx.createOscillator(), g = ctx.createGain(); o.type='square'; o.frequency.setValueAtTime(160, now); g.gain.setValueAtTime(0.0001, now); g.gain.linearRampToValueAtTime(0.12, now+0.01); g.gain.exponentialRampToValueAtTime(0.0001, now+0.25); o.connect(g); g.connect(ctx.destination); o.start(now); o.stop(now+0.28); }
+function playLevelUp(){ const ctx = getAudioCtx(), now = ctx.currentTime; for (let i=0;i<4;i++){ const o = ctx.createOscillator(), g = ctx.createGain(); o.type='sine'; o.frequency.setValueAtTime(420 + i*110, now + i*0.07); g.gain.setValueAtTime(0.0001, now + i*0.07); g.gain.exponentialRampToValueAtTime(0.12, now + i*0.07 + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, now + i*0.07 + 0.8); o.connect(g); g.connect(ctx.destination); o.start(now + i*0.07); o.stop(now + i*0.07 + 0.9);} }
+
+/* confetti */
+function launchConfetti(){
+  const canvas = confettiCanvas; const ctx = confettiCtx;
+  if (!ctx) return;
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+  const pieces = [];
+  for (let i=0;i<80;i++){
+    pieces.push({
+      x: W/2 + (Math.random()-0.5)*400,
+      y: H*0.6 + (Math.random()-0.5)*300,
+      vx: (Math.random()-0.5)*8,
+      vy: -Math.random()*10 - 2,
+      r: Math.round(Math.random()*6 + 6),
+      color: ['#ff595e','#ffca3a','#8ac926','#1982c4','#6a4c93'][Math.floor(Math.random()*5)],
+      rot: Math.random()*Math.PI,
+      vr: (Math.random()-0.5)*0.3
+    });
+  }
+  let t = 0;
+  function frame(){
+    t++;
+    ctx.clearRect(0,0,W,H);
+    for (const p of pieces){
+      p.vy += 0.24; p.x += p.vx; p.y += p.vy; p.rot += p.vr;
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+      ctx.fillStyle = p.color; ctx.fillRect(-p.r/2, -p.r/2, p.r, p.r*0.6);
+      ctx.restore();
+    }
+    if (t < 220) requestAnimationFrame(frame); else ctx.clearRect(0,0,W,H);
+  }
+  frame();
+}
+
+/* persistence */
+const STORAGE_COINS = 'sdm_coins_v1';
+const STORAGE_BEST = 'sdm_best_v1';
+let coins = Number(localStorage.getItem(STORAGE_COINS) || 0);
+let bestScore = Number(localStorage.getItem(STORAGE_BEST) || 0);
+function persistCoins(){ localStorage.setItem(STORAGE_COINS, String(coins)); }
+function persistBest(){ localStorage.setItem(STORAGE_BEST, String(bestScore)); }
+
+/* game core */
+function randInt(min,max){ return Math.floor(Math.random()*(max-min+1))+min; }
+function generateProblem(){
+  if (Math.random() > 0.5){
+    const result = randInt(0,10);
+    const a = randInt(0,result);
+    const b = result - a;
+    return {a,b,op:'+',result};
+  } else {
+    const a = randInt(0,10);
+    const b = randInt(0,a);
+    return {a,b,op:'-',result: a-b};
+  }
+}
+
+/* state */
+let correctCount = 0, incorrectCount = 0;
+let score = 0;
+let currentResult = 0;
+let dropping = false;
+let spawnTimer = null;
+let isPaused = false;
+const MAX_DROPS = 5;
+let dropsSinceCorrect = 0;
+const FORCE_AFTER = 14;
+
+/* combo */
+let consecutiveCorrect = 0;
+function comboMultiplier(){
+  if (consecutiveCorrect <= 0) return 1;
+  const m = Math.min(1 + 0.5 * (consecutiveCorrect - 1), 2);
+  return Math.round(m*100)/100;
+}
+
+/* level */
+let level = 1;
+function pointsNeededForLevel(l){ return 100 * l; }
+
+/* UI refresh */
+function refreshHUD(){
+  scoreVal.textContent = score;
+  coins = Math.floor(score / 10);
+  coinsVal.textContent = coins;
+  bestVal.textContent = bestScore;
+  corrInc.textContent = `${correctCount} / ${incorrectCount}`;
+  levelLabel.textContent = `Level ${level}`;
+  const need = pointsNeededForLevel(level);
+  ptsToNext.textContent = `${Math.max(0, need - score)}`;
+  levelFill.style.width = Math.min(100, (score/need)*100) + '%';
+  comboLabel.textContent = `×${comboMultiplier()}`;
+  persistCoins();
+}
+
+/* floating score pop */
+function spawnScorePop(x, y, text){
+  const pop = document.createElement('div');
+  pop.className = 'score-pop';
+  pop.style.left = (x - 10) + 'px';
+  pop.style.top = (y - 10) + 'px';
+  pop.style.opacity = '1';
+  pop.style.transform = 'translateY(0)';
+  pop.textContent = text;
+  playfield.appendChild(pop);
+  requestAnimationFrame(()=> {
+    pop.style.transition = 'transform 900ms cubic-bezier(.2,.9,.2,1), opacity 900ms';
+    pop.style.transform = 'translateY(-80px) scale(1.05)';
+    pop.style.opacity = '0';
+  });
+  setTimeout(()=> pop.remove(), 920);
+}
+
+/* level up celebration */
+function levelUpCelebrate(){
+  playLevelUp();
+  launchConfetti();
+  levelFill.style.boxShadow = '0 6px 18px rgba(255,200,120,0.25)';
+  setTimeout(()=> { levelFill.style.boxShadow = ''; }, 900);
+}
+
+/* spawnSingle (uniform 0..10, force after threshold).
+   --- SPEED TWEAKS HERE ---
+   - duration range shortened (faster): 2000..4200ms
+   - spawn tick shortened (more frequent): ~900ms base
+*/
+function spawnSingle(){
+  const currentDrops = playfield.querySelectorAll('.drop').length;
+  if (currentDrops >= MAX_DROPS) return;
+
+  let force = dropsSinceCorrect >= (FORCE_AFTER - 1);
+  let value = force ? currentResult : randInt(0,10);
+  const isCorrect = (value === currentResult);
+  if (isCorrect) dropsSinceCorrect = 0; else dropsSinceCorrect++;
+
+  const drop = document.createElement('div');
+  drop.className = 'drop';
+  drop.textContent = value;
+  drop.setAttribute('role','button');
+  drop.style.left = randInt(6,88) + '%';
+  const size = randInt(56,78);
+  drop.style.width = size + 'px';
+  drop.style.height = size + 'px';
+  if (isCorrect) drop.dataset.correct = 'true';
+  drop.style.transform = 'translateY(-20px)';
+  playfield.appendChild(drop);
+
+  const pfRect = playfield.getBoundingClientRect();
+  const dropRect = drop.getBoundingClientRect();
+  const currentTop = dropRect.top - pfRect.top;
+  const travel = pfRect.height - currentTop + 8;
+
+  // faster fall: 2000..4200 ms
+  const durationMs = randInt(20,42) * 100;
+
+  const anim = drop.animate([
+    { transform: 'translateY(-20px)' },
+    { transform: `translateY(${travel}px)` }
+  ], { duration: durationMs, easing: 'linear', fill: 'forwards' });
+
+  drop._anim = anim;
+  if (isPaused) try { anim.pause(); } catch(e){}
+
+  anim.onfinish = () => {
+    if (!playfield.contains(drop)) return;
+    if (drop.dataset.correct === 'true'){
+      incorrectCount++;
+      consecutiveCorrect = 0;
+      updateStateAfterWrongMiss();
+      drop.classList.add('wrong');
+      answerSlot.classList.add('bad');
+      setTimeout(()=> answerSlot.classList.remove('bad'), 420);
+      setTimeout(()=> { if (playfield.contains(drop)) drop.remove(); }, 420);
+      setTimeout(()=> nextProblem(), 580);
+    } else {
+      drop.remove();
+    }
+  };
+
+  drop.addEventListener('click', (e) => {
+    if (isPaused) return;
+    if (!playfield.contains(drop)) return;
+    if (drop._anim) try { drop._anim.cancel(); } catch(e){}
+    const correct = drop.dataset.correct === 'true';
+    const rect = drop.getBoundingClientRect();
+    const pfRect = playfield.getBoundingClientRect();
+    const centerX = rect.left + rect.width/2 - pfRect.left;
+    const centerY = rect.top + rect.height/2 - pfRect.top;
+    if (correct){
+      consecutiveCorrect++;
+      const combo = comboMultiplier();
+      const basePoints = 10;
+      const pts = Math.round(basePoints * combo);
+      score += pts;
+      correctCount++;
+      dropsSinceCorrect = 0;
+      spawnScorePop(centerX, centerY, `+${pts} ✨`);
+      answerSlot.textContent = value;
+      answerSlot.classList.add('ok');
+      drop.classList.add('correct');
+      playDing();
+      if (score > bestScore){ bestScore = score; persistBest(); }
+      stopDropping();
+      setTimeout(()=> {
+        document.querySelectorAll('.drop').forEach(d => { if (d._anim) try { d._anim.cancel(); } catch(e){}; d.remove(); });
+      }, 160);
+      // ==== BUGFIX: call nextProblem() (generate NEW problem) rather than resuming old one ====
+      setTimeout(()=> {
+        answerSlot.classList.remove('ok');
+        // check level up using new score before starting next problem
+        const need = pointsNeededForLevel(level);
+        if (score >= need){
+          level++;
+          coins = Math.floor(score / 10);
+          persistCoins();
+          levelUpCelebrate();
+        }
+        nextProblem();
+      }, 520);
+    } else {
+      incorrectCount++;
+      playBuzz();
+      drop.classList.add('wrong');
+      answerSlot.classList.add('bad');
+      consecutiveCorrect = 0;
+      setTimeout(()=> { if (playfield.contains(drop)) drop.remove(); answerSlot.classList.remove('bad'); }, 420);
+    }
+    refreshHUD();
+  });
+
+  refreshHUD();
+}
+
+/* start/stop with faster spawn tick (base ~900ms) */
+function startDropping(){
+  if (dropping) return;
+  dropping = true;
+  spawnSingle();
+  spawnTimer = setInterval(()=> {
+    if (!isPaused) {
+      spawnSingle();
+      if (Math.random() < 0.28) setTimeout(spawnSingle, randInt(120,420));
+    }
+  }, 900 + randInt(-200,300)); // faster spawn cadence
+}
+function stopDropping(){ dropping = false; if (spawnTimer){ clearInterval(spawnTimer); spawnTimer = null; } }
+
+function updateStateAfterWrongMiss(){ consecutiveCorrect = 0; refreshHUD(); }
+
+/* next problem */
+function nextProblem(){
+  const p = generateProblem();
+  currentResult = p.result;
+  dropsSinceCorrect = 0;
+  problemText.textContent = `${p.a} ${p.op} ${p.b}`;
+  answerSlot.textContent = '...';
+  document.querySelectorAll('.drop').forEach(d => { if (d._anim) try { d._anim.cancel(); } catch(e){}; d.remove(); });
+  startDropping();
+}
+
+/* UI buttons */
+clearBtn.addEventListener('click', ()=> { document.querySelectorAll('.drop').forEach(d => { if (d._anim) try { d._anim.cancel(); } catch(e){}; d.remove(); }); });
+newBtn.addEventListener('click', ()=> nextProblem());
+pauseBtn.addEventListener('click', ()=> setPaused(!isPaused));
+
+function setPaused(paused){
+  isPaused = paused;
+  pauseBtn.textContent = paused ? 'Resume' : 'Pause';
+  if (paused){
+    if (spawnTimer) clearInterval(spawnTimer);
+    document.querySelectorAll('.drop').forEach(d => { if (d._anim && d._anim.pause) try { d._anim.pause(); } catch(e){}; });
+  } else {
+    document.querySelectorAll('.drop').forEach(d => { if (d._anim && d._anim.play) try { d._anim.play(); } catch(e){}; });
+    if (dropping && !spawnTimer){
+      spawnTimer = setInterval(()=> { if (!isPaused){ spawnSingle(); if (Math.random() < 0.28) setTimeout(spawnSingle, randInt(120,420)); } }, 900 + randInt(-200,300));
+    }
+  }
+}
+
+/* HUD refresh & start */
+function refreshHUD(){ scoreVal.textContent = score; coins = Math.floor(score / 10); coinsVal.textContent = coins; bestVal.textContent = bestScore; corrInc.textContent = `${correctCount} / ${incorrectCount}`; levelLabel.textContent = `Level ${level}`; const need = pointsNeededForLevel(level); ptsToNext.textContent = `${Math.max(0, need - score)}`; levelFill.style.width = Math.min(100, (score/need)*100) + '%'; comboLabel.textContent = `×${comboMultiplier()}`; persistCoins(); }
+window.addEventListener('resize', () => { setupConfettiCanvas(); document.querySelectorAll('.drop').forEach(d => { if (d._anim) try { d._anim.cancel(); } catch(e){}; d.remove(); }); setTimeout(()=> nextProblem(), 240); });
+
+/* init */
+refreshHUD();
+nextProblem();
+document.addEventListener('visibilitychange', () => { if (document.hidden) setPaused(true); else setPaused(false); });
+
+/* debug helpers */
+window._sdm = { resetStorage(){ localStorage.removeItem(STORAGE_COINS); localStorage.removeItem(STORAGE_BEST); coins=0;bestScore=0;persistCoins();persistBest(); refreshHUD(); } };
+</script>
+</body>
+</html>
